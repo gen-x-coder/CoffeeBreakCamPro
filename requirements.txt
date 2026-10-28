@@ -1,0 +1,6 @@
+PySide6
+opencv-python
+pyvirtualcam
+numpy
+pillow
+pygrabber
