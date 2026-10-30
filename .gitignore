@@ -1,0 +1,14 @@
+# Personal settings and logs (created next to app.py / the .exe)
+config.json
+crash.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+*.spec
