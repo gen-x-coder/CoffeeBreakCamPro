@@ -1,4 +1,4 @@
-# CoffeeBreak Cam Pro ☕
+# CoffeeBreak Cam Pro
 
 *The webcam that stays in the meeting, so you don't have to.*
 
