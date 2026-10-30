@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
 from PySide6.QtCore import Qt, QTimer, QEvent, QObject, Signal
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor
 
-VERSION = "v0.1-dev7"
+VERSION = "v1.0.0"
 OUTPUT_FPS = 30
 TICK_TOLERANCE = 0.008                   # timer jitter allowance for frame pacing
 MAX_LOOP_SECONDS = 30.0

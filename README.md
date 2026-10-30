@@ -45,7 +45,8 @@ Install [OBS Studio](https://obsproject.com/) once. CoffeeBreak Cam Pro borrows 
 ## Option 1: just download it (easiest)
 
 1. Go to the [latest release](https://github.com/gen-x-coder/CoffeeBreakCamPro/releases/latest).
-2. Download the zip, unpack it anywhere and start **CoffeeBreakCamPro.exe**.
+2. Download `CoffeeBreakCamPro-<version>-windows.zip`, unpack it anywhere and start
+   **CoffeeBreakCamPro.exe**.
 
 No Python needed. That's it. Go get a coffee.
 
@@ -68,10 +69,18 @@ From the source folder (option 2):
 
 ```
 pip install pyinstaller
-pyinstaller --noconsole --name CoffeeBreakCamPro app.py
+pyinstaller --noconsole --clean --name CoffeeBreakCamPro app.py
 ```
 
-The app ends up in `dist\CoffeeBreakCamPro\`. Zip that whole folder to share it.
+The app ends up in `dist\CoffeeBreakCamPro\`. Two large files in there are not used by the app and
+can be removed (PowerShell):
+
+```
+Get-ChildItem dist\CoffeeBreakCamPro -Recurse -Include opencv_videoio_ffmpeg*.dll, opengl32sw.dll | Remove-Item
+```
+
+Zip the whole folder to share it. Official releases are built the same way by GitHub Actions
+(`.github/workflows/release.yml`) and attached to each release automatically.
 (`--onefile` also works and gives a single .exe, but it unpacks itself on every start, which makes
 starting noticeably slower.)
 

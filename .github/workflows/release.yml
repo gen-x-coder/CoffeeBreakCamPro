@@ -1,0 +1,55 @@
+name: Build Windows release
+
+# Runs when a release is published on GitHub, builds the Windows app with
+# PyInstaller and attaches the zip to that release. Can also be started by hand
+# (Actions tab > Build Windows release > Run workflow) to test a build; the zip
+# is then available as a workflow artifact.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build
+        run: pyinstaller --noconsole --clean --name CoffeeBreakCamPro app.py
+
+      - name: Remove files the app does not use
+        shell: pwsh
+        run: |
+          Get-ChildItem dist\CoffeeBreakCamPro -Recurse -Include opencv_videoio_ffmpeg*.dll, opengl32sw.dll | Remove-Item
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          $name = "CoffeeBreakCamPro-${{ github.ref_name }}-windows.zip"
+          Compress-Archive -Path dist\CoffeeBreakCamPro -DestinationPath $name
+          "ZIP_NAME=$name" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Keep the zip as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
+
+      - name: Attach the zip to the release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP_NAME }}
