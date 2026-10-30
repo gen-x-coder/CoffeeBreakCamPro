@@ -102,6 +102,17 @@ effects, **red** frozen, **blue** the loop.
   than this README.
 - If something goes wrong, the app closes both cameras and writes the details to `crash.log`.
 
+## License
+
+CoffeeBreak Cam Pro is released under the [MIT License](LICENSE): use it, change it, share it.
+A mention is appreciated; the license only asks you to keep the copyright notice.
+
+The Windows release also contains third-party libraries, each under its own license:
+PySide6 / Qt (LGPL-3.0), OpenCV (Apache-2.0), NumPy (BSD), pyvirtualcam (GPL-2.0),
+pygrabber and comtypes (MIT). Their full license texts are included in the release zip as
+`THIRD_PARTY_LICENSES.txt`. The OBS Virtual Camera driver is part of OBS Studio (GPL-2.0) and is
+installed separately.
+
 ## Disclaimer
 
 Use responsibly. Your manager may also have read this README.

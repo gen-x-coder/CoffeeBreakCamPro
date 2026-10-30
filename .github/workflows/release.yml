@@ -35,6 +35,12 @@ jobs:
         run: |
           Get-ChildItem dist\CoffeeBreakCamPro -Recurse -Include opencv_videoio_ffmpeg*.dll, opengl32sw.dll | Remove-Item
 
+      - name: Add license files
+        run: |
+          pip install pip-licenses
+          copy LICENSE dist\CoffeeBreakCamPro\LICENSE.txt
+          pip-licenses --packages PySide6-Essentials shiboken6 opencv-python-headless numpy pyvirtualcam pygrabber comtypes --with-license-file --no-license-path --format=plain-vertical --output-file dist\CoffeeBreakCamPro\THIRD_PARTY_LICENSES.txt
+
       - name: Zip
         shell: pwsh
         run: |
