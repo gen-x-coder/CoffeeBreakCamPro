@@ -32,10 +32,21 @@ barista calling out a twelve-word drink order.
 | **Old webcam** | Grainy, low-res, slightly washed out. Vintage. Artisanal. |
 | **Upside down** | The driver got confused. You're a professional; you'll carry on regardless. |
 | **Connecting / Camera not found** | The classics. Timeless. |
+| **Blur background** | Your room, politely out of focus. Loading screens stay sharp, so nobody gets suspicious. |
 
 Switching between live and loop briefly freezes the image, exactly like a real hiccup would.
 Every effect can be fine-tuned on the **Effects** tab; the language (English / Nederlands) is
 under **Settings**.
+
+## Background blur
+
+Tick **Blur background** on the Controls tab (strength under Settings) and turn off the blur in
+Teams itself. Teams can't tell a loading screen from your face, so it would blur those too;
+CoffeeBreak Cam Pro only blurs images of you.
+
+The blur uses a small person-segmentation model (6 MB) that runs on your GPU via DirectML
+(NVIDIA, AMD or Intel, picking the fastest one), or on the CPU when there is no usable GPU.
+Settings shows where it runs. The model is only loaded while the blur is on.
 
 ## Before you start
 
@@ -69,7 +80,7 @@ From the source folder (option 2):
 
 ```
 pip install pyinstaller
-pyinstaller --noconsole --clean --name CoffeeBreakCamPro app.py
+pyinstaller --noconsole --clean --name CoffeeBreakCamPro --add-data "models;models" app.py
 ```
 
 The app ends up in `dist\CoffeeBreakCamPro\`. Two large files in there are not used by the app and
@@ -109,7 +120,9 @@ A mention is appreciated; the license only asks you to keep the copyright notice
 
 The Windows release also contains third-party libraries, each under its own license:
 PySide6 / Qt (LGPL-3.0), OpenCV (Apache-2.0), NumPy (BSD), pyvirtualcam (GPL-2.0),
-pygrabber and comtypes (MIT). Their full license texts are included in the release zip as
+pygrabber, comtypes and ONNX Runtime (MIT). The background blur uses the PP-HumanSeg model from
+the [OpenCV Model Zoo](https://github.com/opencv/opencv_zoo) (Apache-2.0,
+`models/LICENSE-PPHumanSeg.txt`). Their full license texts are included in the release zip as
 `THIRD_PARTY_LICENSES.txt`. The OBS Virtual Camera driver is part of OBS Studio (GPL-2.0) and is
 installed separately.
 

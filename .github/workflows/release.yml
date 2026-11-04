@@ -28,7 +28,7 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       - name: Build
-        run: pyinstaller --noconsole --clean --name CoffeeBreakCamPro app.py
+        run: pyinstaller --noconsole --clean --name CoffeeBreakCamPro --add-data "models;models" app.py
 
       - name: Remove files the app does not use
         shell: pwsh
@@ -39,7 +39,7 @@ jobs:
         run: |
           pip install pip-licenses
           copy LICENSE dist\CoffeeBreakCamPro\LICENSE.txt
-          pip-licenses --packages PySide6-Essentials shiboken6 opencv-python-headless numpy pyvirtualcam pygrabber comtypes --with-license-file --no-license-path --format=plain-vertical --output-file dist\CoffeeBreakCamPro\THIRD_PARTY_LICENSES.txt
+          pip-licenses --packages PySide6-Essentials shiboken6 opencv-python-headless numpy pyvirtualcam pygrabber comtypes onnxruntime-directml --with-license-file --no-license-path --format=plain-vertical --output-file dist\CoffeeBreakCamPro\THIRD_PARTY_LICENSES.txt
 
       - name: Zip
         shell: pwsh

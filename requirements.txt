@@ -3,3 +3,4 @@ opencv-python-headless
 pyvirtualcam
 numpy
 pygrabber
+onnxruntime-directml; sys_platform == "win32"

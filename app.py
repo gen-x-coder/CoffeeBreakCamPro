@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
 from PySide6.QtCore import Qt, QTimer, QEvent, QObject, Signal
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor
 
-VERSION = "v1.0.0"
+VERSION = "v1.1.0"
 OUTPUT_FPS = 30
 TICK_TOLERANCE = 0.008                   # timer jitter allowance for frame pacing
 MAX_LOOP_SECONDS = 30.0
@@ -62,6 +62,18 @@ try:
     HAS_PYGRABBER = True
 except Exception:
     HAS_PYGRABBER = False
+
+try:
+    # Background blur. Without onnxruntime the app still works; the option is then disabled.
+    import onnxruntime as ort
+    HAS_ONNX = True
+except Exception:
+    HAS_ONNX = False
+
+# Bundled files (the model) live next to app.py, or in PyInstaller's _internal folder.
+RESOURCE_DIR = getattr(sys, "_MEIPASS", BASE_DIR)
+SEGMENT_MODEL = os.path.join(RESOURCE_DIR, "models", "human_segmentation_pphumanseg_2023mar.onnx")
+BLUR_STEPS = [0, 8, 14, 22]               # index = strength (1 light .. 3 strong); blur radius at 960 px wide
 
 BUTTON_SIZE = 48
 RESIZE_MARGIN = 6          # invisible border around the expanded window used for resizing
@@ -143,6 +155,19 @@ TEXTS = {
         "cb_apply_live": "Apply effects to the live webcam too",
         "cb_apply_live_tip": "When off, LIVE always shows your unmodified camera; effects only apply to the loop.",
         "language": "Language / Taal:",
+        "cb_blur": "Blur background",
+        "cb_blur_tip": ("Blurs everything behind you. Only your camera image is blurred: loading "
+                        "and 'camera not found' screens stay sharp. Turn off the blur in Teams itself."),
+        "grp_blur": " Background blur ",
+        "s_blur": "Strength",
+        "blur_levels": "light|medium|strong",
+        "blur_engine": "Runs on:",
+        "blur_off": "not loaded (turns on with the blur)",
+        "blur_loading": "loading…",
+        "blur_gpu": "GPU (DirectML)",
+        "blur_cpu": "CPU",
+        "blur_missing": "not available (onnxruntime or model file missing)",
+        "blur_failed": "could not start: {e}",
         "grp_transition": " Switching && loop ",
         "cb_transition": "Freeze the image briefly when switching between live and loop",
         "s_transition": "Freeze for",
@@ -234,6 +259,19 @@ TEXTS = {
         "cb_apply_live": "Effecten ook op de live webcam toepassen",
         "cb_apply_live_tip": "Uit: LIVE toont altijd je onbewerkte camera; effecten gelden dan alleen voor de loop.",
         "language": "Language / Taal:",
+        "cb_blur": "Achtergrond blurren",
+        "cb_blur_tip": ("Maakt alles achter je wazig. Alleen je camerabeeld wordt geblurd: laad- en "
+                        "'camera niet gevonden'-schermen blijven scherp. Zet de blur in Teams zelf uit."),
+        "grp_blur": " Achtergrondblur ",
+        "s_blur": "Sterkte",
+        "blur_levels": "licht|middel|sterk",
+        "blur_engine": "Draait op:",
+        "blur_off": "niet geladen (start met de blur)",
+        "blur_loading": "laden…",
+        "blur_gpu": "GPU (DirectML)",
+        "blur_cpu": "CPU",
+        "blur_missing": "niet beschikbaar (onnxruntime of modelbestand ontbreekt)",
+        "blur_failed": "kon niet starten: {e}",
         "grp_transition": " Omschakelen && loop ",
         "cb_transition": "Beeld kort bevriezen bij wisselen tussen live en loop",
         "s_transition": "Bevries",
@@ -655,6 +693,119 @@ def install_crash_handlers(get_window):
     atexit.register(lambda: get_window() is not None and get_window().shutdown())
 
 
+class BackgroundSegmenter:
+    """Finds the person in the image, in its own thread, so the frame timer never waits.
+
+    Uses PP-HumanSeg (OpenCV Model Zoo, Apache-2.0, 6 MB) via onnxruntime. With the
+    DirectML build of onnxruntime it runs on the GPU (DirectX 12: NVIDIA, AMD or Intel);
+    "high_performance" picks the fast GPU on laptops that also have an Intel chip.
+    Falls back to the CPU when no GPU can be used.
+
+    submit() hands over the newest frame (older unprocessed frames are skipped), mask()
+    returns the newest result: a float32 mask in [0, 1] at 192×192 (1 = person).
+    """
+    SIZE = 192
+
+    def __init__(self):
+        self.engine = "loading"          # loading | gpu | cpu | failed
+        self.error = ""
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._pending = None
+        self._mask = None
+        self._thread = threading.Thread(target=self._run, name="BackgroundSegmenter", daemon=True)
+        self._thread.start()
+
+    def submit(self, frame):
+        with self._lock:
+            self._pending = frame
+        self._wake.set()
+
+    def mask(self):
+        with self._lock:
+            return self._mask
+
+    def reset(self):
+        with self._lock:
+            self._mask = None
+            self._pending = None
+
+    def close(self):
+        self._stop.set()
+        self._wake.set()
+        self._thread.join(timeout=2.0)
+
+    def _create_session(self):
+        options = ort.SessionOptions()
+        options.log_severity_level = 3
+        available = ort.get_available_providers()
+        if "DmlExecutionProvider" in available:
+            # DirectML does not support memory patterns or parallel execution.
+            options.enable_mem_pattern = False
+            options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            try:
+                session = ort.InferenceSession(
+                    SEGMENT_MODEL, sess_options=options,
+                    providers=[("DmlExecutionProvider", {"performance_preference": "high_performance"}),
+                               "CPUExecutionProvider"])
+                if session.get_providers()[0] == "DmlExecutionProvider":
+                    return session, "gpu"
+            except Exception:
+                pass
+            options = ort.SessionOptions()
+            options.log_severity_level = 3
+        options.intra_op_num_threads = 2          # leave the CPU for the rest of the app
+        session = ort.InferenceSession(SEGMENT_MODEL, sess_options=options,
+                                       providers=["CPUExecutionProvider"])
+        return session, "cpu"
+
+    def _run(self):
+        try:
+            session, engine = self._create_session()
+            input_name = session.get_inputs()[0].name
+            # Warm-up: the first GPU run compiles shaders and can take a moment.
+            session.run(None, {input_name: np.zeros((1, 3, self.SIZE, self.SIZE), np.float32)})
+            self.engine = engine
+        except Exception as e:
+            self.error = str(e).splitlines()[0][:120] if str(e) else type(e).__name__
+            self.engine = "failed"
+            return
+        smoothed = None
+        while not self._stop.is_set():
+            self._wake.wait(0.5)
+            self._wake.clear()
+            with self._lock:
+                frame, self._pending = self._pending, None
+            if frame is None:
+                continue
+            try:
+                rgb = cv2.cvtColor(cv2.resize(frame, (self.SIZE, self.SIZE), interpolation=cv2.INTER_AREA),
+                                   cv2.COLOR_BGR2RGB)
+                blob = (rgb.astype(np.float32) / 127.5 - 1.0).transpose(2, 0, 1)[np.newaxis]
+                person = session.run(None, {input_name: blob})[0][0, 1]
+            except Exception:
+                continue
+            # Light temporal smoothing against flicker at the edges.
+            smoothed = person if smoothed is None else cv2.addWeighted(person, 0.6, smoothed, 0.4, 0)
+            with self._lock:
+                self._mask = smoothed
+
+
+def blur_background(frame, mask, radius):
+    """Composite: person sharp, background blurred. Mask is the 192×192 person mask."""
+    h, w = frame.shape[:2]
+    # Blur on a quarter-size copy: much faster and looks the same after upscaling.
+    small = cv2.resize(frame, (max(1, w // 4), max(1, h // 4)), interpolation=cv2.INTER_AREA)
+    sigma = max(1.0, radius * (w / 960) / 4)
+    blurred = cv2.resize(cv2.GaussianBlur(small, (0, 0), sigma), (w, h), interpolation=cv2.INTER_LINEAR)
+    # Soften and firm up the edge at mask resolution (cheap), then scale up once.
+    alpha = cv2.GaussianBlur(mask, (0, 0), 1.2)
+    alpha = np.clip((alpha - 0.3) * 2.5, 0.0, 1.0)
+    alpha = cv2.resize(alpha, (w, h), interpolation=cv2.INTER_LINEAR)
+    return cv2.blendLinear(frame, blurred, alpha, 1.0 - alpha)
+
+
 class _ThreadBridge(QObject):
     """Delivers results from worker threads back on the Qt main thread."""
     done = Signal(object, object)
@@ -696,6 +847,10 @@ class CoffeeBreakCam(QWidget):
         self.is_expanded = False
         self.mode = "LIVE"
         self.preset_key = None
+        self.segmenter = None
+        self._blur_submitted = None
+        self._blur_cache = (None, None, None, None)   # (frame, mask, strength, result)
+        self._blur_status = None
         self._partial_event = None
         self.frozen_frame = None
         self.spinner_angle = 0
@@ -937,6 +1092,57 @@ class CoffeeBreakCam(QWidget):
         self.resolution_combo.setEnabled(True)
         self.resolution_combo.blockSignals(False)
 
+    # ----------------------------------------------------------------- blur --
+    @staticmethod
+    def blur_available():
+        return HAS_ONNX and os.path.isfile(SEGMENT_MODEL)
+
+    def on_blur_toggled(self, checked, save=True):
+        if save:
+            update_config(blur=bool(checked))
+        if checked and self.segmenter is None and self.blur_available():
+            self.segmenter = BackgroundSegmenter()       # loads the model in its own thread
+        elif not checked and self.segmenter is not None:
+            # Free GPU/CPU memory while the blur is off.
+            segmenter, self.segmenter = self.segmenter, None
+            threading.Thread(target=segmenter.close, daemon=True).start()
+        self._blur_submitted = None
+        self._blur_cache = (None, None, None, None)
+        self._refresh_blur_status()
+        self._set_row_enabled(self.blur_strength_slider, checked)
+
+    def _refresh_blur_status(self):
+        if not self.blur_available():
+            key, kwargs = "blur_missing", {}
+        elif self.segmenter is None:
+            key, kwargs = "blur_off", {}
+        elif self.segmenter.engine == "failed":
+            key, kwargs = "blur_failed", {"e": self.segmenter.error}
+        else:
+            key, kwargs = "blur_" + self.segmenter.engine, {}
+        state = (key, self.lang, tuple(kwargs.items()))
+        if state != self._blur_status:
+            self._blur_status = state
+            self.blur_engine_label.setText(self.t(key, **kwargs))
+
+    def _blurred(self, frame):
+        seg = self.segmenter
+        if seg is None or seg.engine == "failed":
+            return frame
+        if frame is not self._blur_submitted:
+            seg.submit(frame)
+            self._blur_submitted = frame
+        mask = seg.mask()
+        strength = self.blur_strength_slider.value()
+        cached_frame, cached_mask, cached_strength, cached = self._blur_cache
+        if frame is cached_frame and mask is cached_mask and strength == cached_strength:
+            return cached                                 # frozen image / same loop frame
+        # No mask yet (model still loading): blur everything rather than show the room.
+        person = mask if mask is not None else np.zeros((BackgroundSegmenter.SIZE,) * 2, np.float32)
+        result = blur_background(frame, person, BLUR_STEPS[strength])
+        self._blur_cache = (frame, mask, strength, result)
+        return result
+
     # ------------------------------------------------------------- shutdown --
     def shutdown(self):
         if self._shut_down:
@@ -946,6 +1152,9 @@ class CoffeeBreakCam(QWidget):
         if self.reader is not None:
             self.reader.close()
             self.reader = None
+        if self.segmenter is not None:
+            self.segmenter.close()
+            self.segmenter = None
         if self.vcam is not None:
             try:
                 self.vcam.close()
@@ -1159,6 +1368,10 @@ class CoffeeBreakCam(QWidget):
         resolution_layout.addWidget(self.resolution_combo, stretch=1)
         layout.addLayout(resolution_layout)
 
+        self.blur_cb = self._checkbox("cb_blur")
+        self._tr(lambda: self.blur_cb.setToolTip(self.t("cb_blur_tip")))
+        layout.addWidget(self.blur_cb)
+
         self.preview_label = QLabel()
         self.preview_label.setMinimumSize(320, 180)
         self.preview_label.setStyleSheet("background-color: #000000; border-radius: 6px;")
@@ -1259,6 +1472,16 @@ class CoffeeBreakCam(QWidget):
         grid.addWidget(self.lang_combo, row, 1, 1, 2)
         layout.addWidget(general)
 
+        blur, grid = self._card("grp_blur")
+        self.blur_strength_slider = self._form_slider(
+            grid, "s_blur", 1, 3, 2, lambda v: self.t("blur_levels").split("|")[v - 1])
+        row = self._next_row(grid)
+        grid.addWidget(self._label("blur_engine"), row, 0)
+        self.blur_engine_label = QLabel()
+        self.blur_engine_label.setStyleSheet("color: #9e9e9e;")
+        grid.addWidget(self.blur_engine_label, row, 1, 1, 2)
+        layout.addWidget(blur)
+
         switching, grid = self._card("grp_transition")
         self.transition_enable = self._form_checkbox(grid, "cb_transition", True)
         self.transition_slider = self._form_slider(
@@ -1267,6 +1490,15 @@ class CoffeeBreakCam(QWidget):
         self.transition_enable.toggled.connect(lambda on: self._set_row_enabled(self.transition_slider, on))
         layout.addWidget(switching)
         layout.addStretch()
+
+        # Blur preference survives restarts (it is a setting, not a glitch effect).
+        cfg = load_config()
+        self.blur_strength_slider.setValue(int(cfg.get("blur_strength", 2)) if str(cfg.get("blur_strength", 2)).isdigit() else 2)
+        self.blur_strength_slider.valueChanged.connect(lambda v: update_config(blur_strength=v))
+        self.blur_cb.setChecked(bool(cfg.get("blur", False)) and self.blur_available())
+        self.blur_cb.setEnabled(self.blur_available())
+        self.blur_cb.toggled.connect(self.on_blur_toggled)
+        self.on_blur_toggled(self.blur_cb.isChecked(), save=False)
 
     def _on_stutter_toggled(self, checked):
         if checked:
@@ -1828,6 +2060,7 @@ class CoffeeBreakCam(QWidget):
             self._record_frame(now, live, capture_stamp)
 
         source = None
+        camera_image = self.mode in ("FROZEN", "LOOP")    # refined below for live
         if self.mode == "CONNECTING":
             source = draw_spinner_frame(w, h, self.spinner_angle, self.t("frame_connecting"))
         elif self.mode == "NO_CAMERA":
@@ -1840,13 +2073,21 @@ class CoffeeBreakCam(QWidget):
         if source is not None and self.mode in ("FROZEN", "LOOP") and effects_on and self.flip_cb.isChecked():
             source = cv2.flip(source, -1)
         if source is None:
+            camera_image = False
             if live is not None and now - capture_stamp < 3.0:
                 source = cv2.flip(live, -1) if effects_on and self.flip_cb.isChecked() else live
+                camera_image = True
             elif self.camera_list is None or (self.reader is not None and status == "connecting") \
                     or (self.reader is None and self.camera_list):
                 source = draw_spinner_frame(w, h, self.spinner_angle, self.t("frame_connecting"))
             else:
                 source = draw_no_camera_frame(w, h, self.t("frame_no_camera"))
+
+        # Background blur: only on images of you. Loading / "camera not found" screens
+        # stay sharp; glitch effects are applied afterwards, like a real bad connection.
+        self._refresh_blur_status()
+        if camera_image and self.blur_cb.isChecked():
+            source = self._blurred(source)
 
         if self.transition_frame is not None:
             if now < self.transition_until:
