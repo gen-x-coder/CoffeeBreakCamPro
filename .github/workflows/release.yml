@@ -39,7 +39,7 @@ jobs:
         run: |
           pip install pip-licenses
           copy LICENSE dist\CoffeeBreakCamPro\LICENSE.txt
-          pip-licenses --packages PySide6-Essentials shiboken6 opencv-python-headless numpy pyvirtualcam pygrabber comtypes onnxruntime-directml --with-license-file --no-license-path --format=plain-vertical --output-file dist\CoffeeBreakCamPro\THIRD_PARTY_LICENSES.txt
+          pip-licenses --packages PySide6-Essentials shiboken6 opencv-python numpy pyvirtualcam pygrabber comtypes cv2-enumerate-cameras onnxruntime-directml psutil nvidia-ml-py --with-license-file --no-license-path --format=plain-vertical --output-file dist\CoffeeBreakCamPro\THIRD_PARTY_LICENSES.txt
 
       - name: Zip
         shell: pwsh

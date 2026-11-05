@@ -1,6 +1,7 @@
 # Personal settings and logs (created next to app.py / the .exe)
 config.json
 crash.log
+backgrounds/
 
 # Python
 __pycache__/
@@ -12,3 +13,4 @@ venv/
 build/
 dist/
 *.spec
+models/rvm_mobilenetv3_fp32.onnx

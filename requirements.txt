@@ -1,6 +1,10 @@
 PySide6-Essentials
-opencv-python-headless
+# The full OpenCV build: on Windows the headless one has no Media Foundation.
+opencv-python
 pyvirtualcam
 numpy
 pygrabber
+cv2-enumerate-cameras
 onnxruntime-directml; sys_platform == "win32"
+psutil
+nvidia-ml-py
