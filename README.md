@@ -2,7 +2,7 @@
 
 *The webcam that stays in the meeting, so you don't have to.*
 
-![CoffeeBreak Cam Pro](docs/screenshot.png)
+![CoffeeBreak Cam Pro](docs/promo.png)
 
 CoffeeBreak Cam Pro sits between your real webcam and your video calls. It shows up as a
 virtual camera, and from then on **you** decide what the meeting sees: you, a frozen you, a
@@ -20,6 +20,8 @@ We briefly considered the full name:
 barista calling out a twelve-word drink order.
 
 ## What's on the menu
+
+![CoffeeBreak Cam Pro](docs/screenshot.png)
 
 ### The four big buttons
 
