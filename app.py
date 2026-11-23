@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
 from PySide6.QtCore import Qt, QTimer, QEvent, QObject, Signal, QSize
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QIcon
 
-VERSION = "v1.2.0-dev1"
+VERSION = "v1.3.0-dev2"
 OUTPUT_FPS = 30
 TICK_TOLERANCE = 0.008                   # timer jitter allowance for frame pacing
 MAX_LOOP_SECONDS = 30.0
@@ -235,6 +235,12 @@ TEXTS = {
         "r_pacman": "Pac-Man",
         "reactions_tip": "A short animation on top of your image. Click again for a new one.",
         "cb_blur": "Blur background",
+        "p_fun_forehead": "Mirror: forehead",
+        "p_fun_forehead_tip": "Funhouse mirror: the top half of you is stretched upwards. Hello, big forehead. Only you, not the room.",
+        "p_fun_middle": "Mirror: long face",
+        "p_fun_middle_tip": "Funhouse mirror: the middle of your face is stretched long, top and bottom squeezed. Only you, not the room.",
+        "p_fun_bulge": "Mirror: bulge",
+        "p_fun_bulge_tip": "Funhouse mirror: your face bulges out like a convex mirror. Big nose, big eyes. Only you, not the room.",
         "cb_blur_tip": ("Blurs everything behind you. Only your camera image is blurred: loading "
                         "and 'camera not found' screens stay sharp. Turn off the blur in Teams itself."),
         "grp_blur": " Background blur ",
@@ -382,6 +388,12 @@ TEXTS = {
         "r_pacman": "Pac-Man",
         "reactions_tip": "Een korte animatie over je beeld. Klik opnieuw voor een nieuwe.",
         "cb_blur": "Achtergrond blurren",
+        "p_fun_forehead": "Spiegel: voorhoofd",
+        "p_fun_forehead_tip": "Lachspiegel: de bovenste helft van je beeld wordt omhoog uitgerekt. Hallo, groot voorhoofd. Alleen jij, niet de kamer.",
+        "p_fun_middle": "Spiegel: lang gezicht",
+        "p_fun_middle_tip": "Lachspiegel: het midden van je gezicht wordt lang uitgerekt, boven en onder samengeperst. Alleen jij, niet de kamer.",
+        "p_fun_bulge": "Spiegel: bol",
+        "p_fun_bulge_tip": "Lachspiegel: je gezicht bolt op als in een bolle spiegel. Grote neus, grote ogen. Alleen jij, niet de kamer.",
         "cb_blur_tip": ("Maakt alles achter je wazig. Alleen je camerabeeld wordt geblurd: laad- en "
                         "'camera niet gevonden'-schermen blijven scherp. Zet de blur in Teams zelf uit."),
         "grp_blur": " Achtergrondblur ",
@@ -477,16 +489,20 @@ def draw_spinner_frame(width, height, angle, text):
     cv2.circle(frame, center, radius, (45, 45, 45), thickness, cv2.LINE_AA)
     cv2.ellipse(frame, center, (radius, radius), angle, 0, 270, (245, 180, 60), thickness, cv2.LINE_AA)
 
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.55
-    text_size, _ = cv2.getTextSize(text, font, font_scale, 1)
-    text_x = (width - text_size[0]) // 2
-    text_y = center[1] + radius + 40
-    cv2.putText(frame, text, (text_x, text_y), font, font_scale, (200, 200, 200), 1, cv2.LINE_AA)
+    # Small and quiet: the spinner tells the story, the text only makes it believable.
+    if text:
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.42 * max(0.75, width / 960)
+        text_size, _ = cv2.getTextSize(text, font, font_scale, 1)
+        text_x = (width - text_size[0]) // 2
+        text_y = center[1] + radius + 34
+        cv2.putText(frame, text, (text_x, text_y), font, font_scale, (150, 150, 150), 1, cv2.LINE_AA)
     return frame
 
 
-def draw_no_camera_frame(width, height, text):
+def draw_no_camera_frame(width, height, text=None):
+    """Crossed-out camera. No text by default: the icon reads in every language, and video
+    apps such as Teams mirror your own preview, which would show text back to front."""
     frame = np.zeros((height, width, 3), dtype=np.uint8)
     center = (width // 2, height // 2 - 20)
 
@@ -504,12 +520,13 @@ def draw_no_camera_frame(width, height, text):
     slash_end = (center[0] + 70, center[1] + 55)
     cv2.line(frame, slash_start, slash_end, (60, 60, 220), 6, cv2.LINE_AA)
 
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.6
-    text_size, _ = cv2.getTextSize(text, font, font_scale, 1)
-    text_x = (width - text_size[0]) // 2
-    text_y = center[1] + cam_h // 2 + 45
-    cv2.putText(frame, text, (text_x, text_y), font, font_scale, (180, 180, 180), 1, cv2.LINE_AA)
+    if text:
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.6
+        text_size, _ = cv2.getTextSize(text, font, font_scale, 1)
+        text_x = (width - text_size[0]) // 2
+        text_y = center[1] + cam_h // 2 + 45
+        cv2.putText(frame, text, (text_x, text_y), font, font_scale, (180, 180, 180), 1, cv2.LINE_AA)
     return frame
 
 
@@ -1237,6 +1254,88 @@ def blur_background(frame, mask, radius, lens=BLUR_LENS_DEFAULT, dim=0.0, desatu
         soft = soft * (1.0 - dim)
     blurred = cv2.resize(np.clip(soft, 0, 255).astype(np.uint8), (w, h), interpolation=cv2.INTER_LINEAR)
     return cv2.blendLinear(frame, blurred, alpha, 1.0 - alpha)
+
+
+FUNHOUSE_MODES = ("forehead", "middle", "bulge")
+_FUNHOUSE_MAPS = {}
+
+
+def _stretch_middle(n, centre, half_band, factor):
+    """1-D map: the band around `centre` is magnified `factor`×. Above and below it nothing
+    is stretched; it just moves up and down, so you grow out over your own outline instead
+    of leaving a ghost (the very top and bottom fall out of the picture)."""
+    y = np.arange(n, dtype=np.float32)
+    last = n - 1.0
+    top, bottom = max(1.0, centre - half_band), min(last - 1.0, centre + half_band)
+    src_top, src_bottom = centre - (centre - top) / factor, centre + (bottom - centre) / factor
+    src = np.where(y < top, y + (src_top - top),
+                   np.where(y > bottom, y + (src_bottom - bottom),
+                            centre + (y - centre) / factor))
+    # Round off the kinks at the band edges, so it bends like glass instead of folding.
+    k = max(3, int(n * 0.06)) | 1
+    return cv2.GaussianBlur(src.reshape(-1, 1), (1, k), 0, borderType=cv2.BORDER_REPLICATE).ravel().astype(np.float32)
+
+
+def funhouse_maps(w, h, mode, cx, cy):
+    """remap() grids for one funhouse mirror at size w×h. cx, cy = your face, 0..1.
+
+    forehead: everything above the middle of the image is pulled upwards (big forehead).
+    middle:   the middle of your face is stretched long, the rest just moves aside.
+    bulge:    a convex mirror on your face: nose and eyes big, the edges normal.
+    """
+    key = (w, h, mode, round(cx, 2), round(cy, 2))
+    if key not in _FUNHOUSE_MAPS:
+        if len(_FUNHOUSE_MAPS) > 24:
+            _FUNHOUSE_MAPS.clear()
+        xs, ys = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+        if mode == "forehead":
+            c = (h - 1) * 0.5
+            ys = np.where(ys < c, c - (c - ys) / 1.8, ys).astype(np.float32)
+        elif mode == "middle":
+            column = _stretch_middle(h, cy * (h - 1), 0.16 * h, 2.0)
+            # Only around your head: towards the sides it fades back to a normal mirror,
+            # so your shoulders stay where they are (and leave no ghost behind).
+            d = np.abs(np.arange(w, dtype=np.float32) - cx * (w - 1)) / h
+            weight = np.clip((0.5 - d) / 0.22, 0.0, 1.0)
+            weight = weight * weight * (3 - 2 * weight)
+            ys = (ys + weight[None, :] * (column[:, None] - ys)).astype(np.float32)
+        elif mode == "bulge":
+            ccx, ccy, radius = cx * (w - 1), cy * (h - 1), 0.34 * h
+            dx, dy = xs - ccx, ys - ccy
+            rn = np.sqrt(dx * dx + dy * dy) / radius
+            # Inside the circle: sample closer to the centre (= magnify, 2× in the middle),
+            # easing smoothly back to 1:1 at the rim so there is no visible edge.
+            factor = np.where(rn < 1.0, 1.0 - 0.5 * (1.0 - rn * rn) ** 2, 1.0)
+            xs = (ccx + dx * factor).astype(np.float32)
+            ys = (ccy + dy * factor).astype(np.float32)
+        _FUNHOUSE_MAPS[key] = (xs, ys)
+    return _FUNHOUSE_MAPS[key]
+
+
+def funhouse(frame, mask, mode, cx=0.5, cy=0.4):
+    """Stretch only the person. Returns (image, stretched mask).
+
+    The stretched person is bigger than the original, so it covers your old outline and
+    the room around you stays untouched. Without a mask the whole image is stretched.
+    """
+    h, w = frame.shape[:2]
+    mx, my = funhouse_maps(w, h, mode, cx, cy)
+    stretched = cv2.remap(frame, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    if mask is None:
+        return stretched, None
+    # The model's mask is square; bring it to the picture's shape first, or the round bulge
+    # would be an oval on the mask.
+    mw, mh = max(2, w // 3), max(2, h // 3)
+    mask = cv2.resize(mask, (mw, mh), interpolation=cv2.INTER_LINEAR)
+    kx, ky = funhouse_maps(mw, mh, mode, cx, cy)
+    stretched_mask = cv2.remap(mask, kx, ky, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    # The mask is always a little wider than you are. Magnified, that thin rim of room around
+    # you becomes a visible pale ring when the blur is on, so tighten the stretched mask.
+    stretched_mask = np.clip((stretched_mask - 0.6) * 3.0 + 0.5, 0.0, 1.0)
+    # Where you were but no longer are, show the stretched picture too (a bit of bent room)
+    # rather than the original you: that would look like a ghost next to you.
+    alpha = mask_to_alpha(np.maximum(stretched_mask, mask), w, h)
+    return cv2.blendLinear(stretched, frame, alpha, 1.0 - alpha), stretched_mask
 
 
 def mask_to_alpha(mask, w, h):
@@ -2311,7 +2410,57 @@ class CoffeeBreakCam(QWidget):
         return self.blur_cb.isChecked() or self.bg_slot > 0
 
     def segmenter_wanted(self):
-        return self.background_wanted() or self.hedge.active
+        return self.background_wanted() or self.hedge.active or self.funhouse_active()
+
+    def funhouse_mode(self):
+        for mode, btn in getattr(self, "fun_buttons", {}).items():
+            if btn.isChecked():
+                return mode
+        return None
+
+    def funhouse_active(self):
+        return self.funhouse_mode() is not None
+
+    def on_funhouse_toggled(self, mode, checked):
+        if checked:
+            # One mirror at a time: they don't add up to anything nice.
+            for other, btn in self.fun_buttons.items():
+                if other != mode and btn.isChecked():
+                    btn.blockSignals(True); btn.setChecked(False); btn.blockSignals(False)
+            if self.mode not in ("LIVE", "LOOP", "FROZEN"):
+                self._go_live()
+        self._fun_centre = None
+        self._update_segmenter()          # the mirror needs to know where you are
+        self.update_button_style()
+
+    def _face_centre(self, mask, aspect=16 / 9):
+        """Rough centre of your face from the person mask (0..1), smoothed over time."""
+        if mask is None:
+            return 0.5, 0.4
+        mh, mw = mask.shape[:2]
+        rows = np.nonzero(mask.max(axis=1) > 0.5)[0]
+        if len(rows) == 0:
+            return self._fun_centre or (0.5, 0.4)
+        top = rows[0]
+        head = mask[top:min(mh, top + int(0.25 * mh))]
+        weights = np.clip(head.sum(axis=0) - 0.3, 0, None)
+        cx = float((weights * np.arange(mw)).sum() / max(1e-6, weights.sum()) / max(1, mw - 1))
+        # Eyes and nose sit a little under one head-width below the top of your head.
+        row = mask[min(mh - 1, top + int(0.12 * mh))] > 0.5
+        head_width = float(row.sum()) / mw * aspect          # in units of image height
+        cy = float(np.clip(top / max(1, mh - 1) + 0.85 * head_width, 0.2, 0.7))
+        if self._fun_centre is not None:
+            cx = 0.85 * self._fun_centre[0] + 0.15 * cx
+            cy = 0.85 * self._fun_centre[1] + 0.15 * cy
+        self._fun_centre = (cx, cy)
+        return cx, cy
+
+    def _funhouse(self, frame, frame_key):
+        """Apply the funhouse mirror to you; returns (image, mask to use for the blur)."""
+        usable = self.segmenter is not None and self.segmenter.engine != "failed"
+        mask = self._person_mask(frame, frame_key) if usable else None
+        cx, cy = self._face_centre(mask, frame.shape[1] / frame.shape[0])
+        return funhouse(frame, mask, self.funhouse_mode(), cx, cy)
 
     def _person_mask(self, frame, frame_key=None):
         """Newest person mask for this frame (submits the frame if it is new)."""
@@ -2407,11 +2556,12 @@ class CoffeeBreakCam(QWidget):
             self._blur_status = state
             self.blur_engine_label.setText(self.t(key, **kwargs))
 
-    def _blurred(self, frame, frame_key=None):
+    def _blurred(self, frame, frame_key=None, mask=None):
         seg = self.segmenter
         if seg is None or seg.engine == "failed":
             return frame
-        mask = self._person_mask(frame, frame_key)
+        if mask is None:
+            mask = self._person_mask(frame, frame_key)
         background = self._background_image(frame.shape[1], frame.shape[0])
         setting = (("image", self.bg_slot) if background is not None else
                    ("blur", self.blur_strength_slider.value(), self.blur_lens_cb.isChecked(),
@@ -2836,7 +2986,21 @@ class CoffeeBreakCam(QWidget):
         preset_grid.addWidget(self._button("p_old", self.apply_preset_old_webcam), 2, 1)
         preset_grid.addWidget(self._button("p_flip", self.apply_preset_flip), 3, 0)
         # "Default settings" last, across the full width: it undoes everything above it.
-        preset_grid.addWidget(self._button("p_reset", self.apply_preset_reset), 4, 0, 1, 2)
+        # Funhouse mirrors: toggle buttons, one at a time (orange while on).
+        self._fun_centre = None
+        self.fun_buttons = {}
+        fun_row = QHBoxLayout()
+        for mode in FUNHOUSE_MODES:
+            btn = QPushButton()
+            btn.setCheckable(True)
+            btn.setStyleSheet("QPushButton:checked { background-color: #e65100; color: white; }")
+            self._tr(lambda btn=btn, mode=mode: (btn.setText(self.t("p_fun_" + mode)),
+                                                 btn.setToolTip(self.t("p_fun_" + mode + "_tip"))))
+            btn.toggled.connect(lambda checked, mode=mode: self.on_funhouse_toggled(mode, checked))
+            self.fun_buttons[mode] = btn
+            fun_row.addWidget(btn)
+        preset_grid.addLayout(fun_row, 4, 0, 1, 2)
+        preset_grid.addWidget(self._button("p_reset", self.apply_preset_reset), 5, 0, 1, 2)
         self.btn_hedge = QPushButton()
         self.btn_hedge.clicked.connect(self.toggle_hedge)
         self._tr(self._refresh_hedge_button)
@@ -3172,7 +3336,7 @@ class CoffeeBreakCam(QWidget):
                 or self.noise_slider.value() > 0 or self.flicker_slider.value() > 0
                 or self.fps_slider.value() < OUTPUT_FPS or self.glitch_slider.value() > 0
                 or self.partial_slider.value() > 0 or self.auto_exp_cb.isChecked()
-                or self.flip_cb.isChecked())
+                or self.flip_cb.isChecked() or self.funhouse_active())
 
     def update_button_style(self):
         # Green: plain live camera · orange: live with effects or "connecting" ·
@@ -3324,6 +3488,9 @@ class CoffeeBreakCam(QWidget):
                       stutter=False, spinner=False, interval=10, duration=20, switch_mode=True):
         self.partial_slider.setValue(partial)
         self.flip_cb.setChecked(flip)
+        # The funhouse mirror is a joke effect, so LIVE and "Default settings" end it too.
+        for btn in self.fun_buttons.values():
+            btn.setChecked(False)
         self.lowres_slider.setValue(lowres)
         self.block_slider.setValue(block)
         self.noise_slider.setValue(noise)
@@ -3644,7 +3811,7 @@ class CoffeeBreakCam(QWidget):
         if self.mode == "CONNECTING":
             source = draw_spinner_frame(w, h, self.spinner_angle, self.t("frame_connecting"))
         elif self.mode == "NO_CAMERA":
-            source = draw_no_camera_frame(w, h, self.t("frame_no_camera"))
+            source = draw_no_camera_frame(w, h)
         elif self.mode == "FROZEN" and self.frozen_frame is not None:
             source = self.frozen_frame
         elif self.mode == "LOOP" and self.recorded_loop_frames:
@@ -3658,12 +3825,12 @@ class CoffeeBreakCam(QWidget):
                 source = cv2.flip(live, -1) if effects_on and self.flip_cb.isChecked() else live
                 camera_image = True
             elif not self.camera_enabled:
-                source = draw_no_camera_frame(w, h, self.t("frame_camera_off"))
+                source = draw_no_camera_frame(w, h)
             elif self.camera_list is None or (self.reader is not None and status == "connecting") \
                     or (self.reader is None and self.camera_list):
                 source = draw_spinner_frame(w, h, self.spinner_angle, self.t("frame_connecting"))
             else:
-                source = draw_no_camera_frame(w, h, self.t("frame_no_camera"))
+                source = draw_no_camera_frame(w, h)
 
         # Background blur: only on images of you. Loading / "camera not found" screens
         # stay sharp; glitch effects are applied afterwards, like a real bad connection.
@@ -3678,8 +3845,12 @@ class CoffeeBreakCam(QWidget):
             frame_key = ("loop", self._loop_decoded_index, flipped)
         else:
             frame_key = ("frozen", id(self.frozen_frame), flipped)
+        person_mask = None
+        if camera_image and self.funhouse_active():
+            source, person_mask = self._funhouse(source, frame_key)
         if camera_image and self.background_wanted():
-            source = self._blurred(source, frame_key)
+            # After the funhouse mirror the blur follows your stretched outline.
+            source = self._blurred(source, frame_key, person_mask)
         if camera_image and self.hedge.active:
             mask = self._person_mask(raw_source, frame_key)
             usable = self.segmenter is not None and self.segmenter.engine != "failed"

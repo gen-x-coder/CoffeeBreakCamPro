@@ -49,6 +49,20 @@ Switching between live and loop briefly freezes the image, exactly like a real h
 
 Every effect can also be set by hand on the **Effects** tab.
 
+### Funhouse mirrors
+
+Three buttons in **Quick presets**, under *Upside down* and *Disappear into the hedge*:
+
+| Mirror | What happens |
+|---|---|
+| **Mirror: forehead** | The top half of you is stretched upwards. Congratulations on your new forehead. |
+| **Mirror: long face** | The middle of your face is stretched long; the rest of you stays as it is. Very serious. Very long. |
+| **Mirror: bulge** | Your face bulges out like a convex mirror: big nose, big eyes, normal ears. |
+
+One mirror at a time (click it again to turn it off). The mirrors follow your face, and only you
+are stretched, not the room: they use the same person detection as the blur. **LIVE** or
+**Default settings** puts your face back to normal.
+
 ### Reactions
 
 Confetti, fireworks, disco lights, hearts, balloons, rain and a coffee cup being chased by a
@@ -158,6 +172,11 @@ The ☕ border tells you what the meeting sees: **green** your plain camera, **o
 effects, **red** frozen, **blue** the loop, **grey** camera off.
 
 ## Barista notes
+
+- **Text looks back to front in Teams?** Teams mirrors only your own preview; everyone else sees
+  you the right way round. Turn off *Mirror my video* in Teams (device settings, also during a
+  meeting) and your preview matches what the others see. The app's own screens use icons
+  instead of text where it can.
 
 - **Settings** are remembered in `config.json` next to `app.py` or the .exe: camera, resolution,
   language, blur, backgrounds, window position and size.
