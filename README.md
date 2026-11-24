@@ -44,7 +44,7 @@ Switching between live and loop briefly freezes the image, exactly like a real h
 | **Partial glitches** | Half the picture hangs, a corner goes blocky. Lost packets. Happens to the best of us. |
 | **Old webcam / low-res** | Grainy, low-res, slightly washed out. Vintage. Artisanal. |
 | **Upside down** | The driver got confused. You're a professional; you'll carry on regardless. |
-| **Disappear into the hedge** | A hedge grows in behind you, then closes in from both sides until you're gone. Click again to step back out. |
+| **Disappear into the hedge** | A hedge grows in behind you, then you slowly back into it: smaller, a little darker, the leaves closing in around you until only your face is left… and then not even that. Click again to step back out. |
 | **Default settings** | Everything back to normal. |
 
 Every effect can also be set by hand on the **Effects** tab.

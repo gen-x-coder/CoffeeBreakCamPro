@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
 from PySide6.QtCore import Qt, QTimer, QEvent, QObject, Signal, QSize
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QIcon
 
-VERSION = "v1.3.0"
+VERSION = "v1.3.1"
 OUTPUT_FPS = 30
 TICK_TOLERANCE = 0.008                   # timer jitter allowance for frame pacing
 MAX_LOOP_SECONDS = 30.0
@@ -1886,20 +1886,21 @@ def replace_background(frame, mask, background):
 
 
 class HedgeEffect:
-    """You disappear into a hedge.
+    """You back slowly into a hedge.
 
     1. The hedge fades in as your background (like the blur, around you).
-    2. It then takes you over from the left and right, closing towards the middle with a
-       leafy edge, until only hedge is left. It stays until switched off.
-    3. Switched off, it opens again from the middle outwards and fades away.
+    2. You step back into it: you get a little smaller and lower (as if you move away from
+       the camera) and darker (its shadow), while the leaves close in on you from your
+       outline inwards. Your face goes last. It stays until switched off.
+    3. Switched off, you step out again the same way and the hedge fades away.
 
     Needs the person mask from the background segmenter; without it (no model) the hedge
     simply closes over the whole image from both sides.
     """
-    FADE = 0.6           # seconds: hedge appears as background
-    CLOSE = 1.8          # seconds: hedge closes over you from both sides
-    OPEN = 1.4
-    UNFADE = 0.6
+    FADE = 0.8           # seconds: hedge appears as background
+    CLOSE = 3.4          # seconds: you back into the hedge
+    OPEN = 2.6
+    UNFADE = 0.8
 
     def __init__(self):
         self.state = "off"          # off | waiting | entering | hidden | leaving
@@ -1907,6 +1908,7 @@ class HedgeEffect:
         self._from = 0.0
         self._size = None
         self._center = None         # smoothed horizontal position and half-width of you
+        self._face = None           # smoothed position of your face (quarter-res pixels)
 
     @property
     def active(self):
@@ -2008,6 +2010,7 @@ class HedgeEffect:
         p = self._progress(now)
         if p <= 0.0:
             self._center = None
+            self._face = None
             return frame
         h, w = frame.shape[:2]
         if self._size != (w, h):
@@ -2018,6 +2021,8 @@ class HedgeEffect:
         sway = (np.sin(gy / 9.0 + now * 2.1) * 1.4 + np.sin(gy / 23.0 - now * 1.3) * 1.0) * (w / 960)
         tex = cv2.remap(self._tex, gx + sway, gy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
+        if mask is not None and p > 1.0:
+            return self._render_backing_in(frame, mask, tex, p - 1.0)
         # Where is the hedge? 1) everything that is not you, faded in.
         if mask is not None:
             person = cv2.resize(mask, (hw, hh), interpolation=cv2.INTER_LINEAR)
@@ -2038,6 +2043,73 @@ class HedgeEffect:
         alpha = cv2.resize(np.asarray(alpha, np.float32) * np.ones((hh, hw), np.float32), (w, h),
                            interpolation=cv2.INTER_LINEAR)
         return cv2.blendLinear(tex, frame, alpha, 1.0 - alpha)
+
+    SHRINK = 0.20        # you get 20% smaller, shrinking towards the bottom of the picture
+                         # (you stay seated at your desk, you just move away)
+    SHADOW = 0.4         # and up to 40% darker, in the shade of the leaves
+
+    def _face_point(self, m):
+        """Your face in the (firmed) quarter-res mask, smoothed: x = middle of your head,
+        y = a little under one head-width below the top of your head."""
+        qh, qw = m.shape[:2]
+        rows = np.nonzero(m.max(axis=1) > 0.5)[0]
+        if len(rows):
+            top = rows[0]
+            head = m[top:min(qh, top + max(2, int(0.25 * qh)))]
+            weights = np.clip(head.sum(axis=0) - 0.3, 0, None)
+            fx = float((weights * np.arange(qw)).sum() / max(1e-6, weights.sum()))
+            width = float((m[min(qh - 1, top + int(0.12 * qh))] > 0.5).sum())
+            target = (fx, min(qh * 0.7, top + 0.85 * width))
+        else:
+            target = self._face or (qw / 2, qh * 0.4)
+        if self._face is None:
+            self._face = target
+        else:
+            self._face = tuple(0.85 * a + 0.15 * b for a, b in zip(self._face, target))
+        return self._face
+
+    def _render_backing_in(self, frame, mask, tex, closing):
+        """Phase 2: the hedge is already your background; now you back into it."""
+        h, w = frame.shape[:2]
+        e = closing * closing * (3.0 - 2.0 * closing)        # ease in and out
+        tex = cv2.resize(tex, (w, h), interpolation=cv2.INTER_LINEAR)
+        if closing >= 1.0:
+            return tex
+        qw, qh = max(4, w // 4), max(4, h // 4)
+        m = cv2.resize(mask, (qw, qh), interpolation=cv2.INTER_LINEAR)
+        m = np.clip((cv2.GaussianBlur(m, (0, 0), 1.0) - 0.3) * 2.5, 0, 1)
+        fx, fy = self._face_point(m)
+
+        # 1) Step back: smaller towards the bottom edge, so your shoulders stay in the picture.
+        scale = 1.0 - self.SHRINK * e
+        anchor_x, anchor_y = fx * 4, float(h)
+        warp = np.float32([[scale, 0, (1 - scale) * anchor_x], [0, scale, (1 - scale) * anchor_y]])
+        person = cv2.warpAffine(frame, warp, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        warp_q = warp.copy()
+        warp_q[:, 2] /= 4
+        mq = cv2.warpAffine(m, warp_q, (qw, qh), flags=cv2.INTER_LINEAR, borderValue=0)
+        face_x, face_y = fx, qh + (fy - qh) * scale          # where your face is now
+
+        # 2) The leaves close in from your sides and the top of your head; you stay attached to
+        #    the bottom of the picture (no floating cut-out). Your face goes last. The first
+        #    part is only stepping back; the leaves follow a moment later.
+        solid = cv2.copyMakeBorder((mq > 0.5).astype(np.uint8), 0, qh, 0, 0, cv2.BORDER_REPLICATE)
+        inside = cv2.distanceTransform(solid, cv2.DIST_L2, 3)[:qh]
+        inside /= inside.max() + 1e-6
+        gx, gy = np.meshgrid(np.arange(qw, dtype=np.float32), np.arange(qh, dtype=np.float32))
+        near_face = np.clip(1.0 - np.hypot(gx - face_x, gy - face_y) / (0.75 * qh), 0, 1)
+        noise = cv2.resize(self._edge_noise, (qw, qh), interpolation=cv2.INTER_LINEAR)
+        score = 0.45 * near_face + 0.55 * inside + 0.12 * noise
+        leaves = min(1.0, max(0.0, (closing - 0.2) / 0.8))
+        leaves = leaves * leaves * (3.0 - 2.0 * leaves)
+        threshold = -0.15 + 1.1 * leaves
+        keep = np.clip((score - threshold) / 0.05 + 0.5, 0, 1) * mq
+        keep *= min(1.0, (1.0 - closing) / 0.12)          # the last bit of your face fades away
+        alpha = cv2.resize(keep.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
+
+        # 3) In the shade of the hedge.
+        person = cv2.convertScaleAbs(person, alpha=1.0 - self.SHADOW * e)
+        return cv2.blendLinear(person, tex, alpha, 1.0 - alpha)
 
 
 class _ThreadBridge(QObject):
